@@ -31,10 +31,10 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     can_sends = []
 
-    # Tesla EPS enforces disabling steering on heavy lateral override force.
-    # When enabling in a tight curve, we wait until user reduces steering force to start steering.
+    # Tesla EPS enforces disabling steering on strong driver torque override.
+    # When enabling in a tight curve, wait until the override condition clears before steering.
     # Canceling is done on rising edge and is handled generically with CC.cruiseControl.cancel
-    lat_active = CC.latActive and CS.hands_on_level < 3
+    lat_active = CC.latActive and not CS.out.steeringDisengage
 
     if self.frame % 2 == 0:
       # Angular rate limit based on speed

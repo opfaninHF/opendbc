@@ -5,7 +5,7 @@ import numpy as np
 
 from opendbc.car.lateral import get_max_angle_delta_vm, get_max_angle_vm
 from opendbc.car.tesla.teslacan import get_steer_ctrl_type
-from opendbc.car.tesla.values import CarControllerParams, TeslaSafetyFlags, TeslaFlags, CANBUS
+from opendbc.car.tesla.values import CANBUS, CarControllerParams, STEER_DISENGAGE_THRESHOLD, TeslaSafetyFlags, TeslaFlags
 from opendbc.car.tesla.carcontroller import get_safety_CP
 from opendbc.car.structs import CarParams
 from opendbc.car.vehicle_model import VehicleModel
@@ -89,8 +89,10 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
       self.__class__.cnt_angle_cmd += 1
     return self.packer.make_can_msg_safety("DAS_steeringControl", bus, values)
 
-  def _angle_meas_msg(self, angle: float, hands_on_level: int = 0, eac_status: int = 1, eac_error_code: int = 0):
+  def _angle_meas_msg(self, angle: float, hands_on_level: int = 0, eac_status: int = 1, eac_error_code: int = 0,
+                      torsion_bar_torque: float = 0.0):
     values = {"EPAS3S_internalSAS": angle, "EPAS3S_handsOnLevel": hands_on_level,
+              "EPAS3S_torsionBarTorque": torsion_bar_torque,
               "EPAS3S_eacStatus": eac_status, "EPAS3S_eacErrorCode": eac_error_code,
               "EPAS3S_sysStatusCounter": self.cnt_epas % 16}
     self.__class__.cnt_epas += 1
@@ -101,6 +103,10 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
     if not quality_flag:
       values["ESP_driverBrakeApply"] = random.choice((0, 3))  # NotInit_orOff, Faulty_SNA
     return self.packer.make_can_msg_safety("ESP_status", 0, values)
+
+  def _user_brake_ibst_msg(self, brake):
+    values = {"IBST_driverBrakeApply": 2 if brake else 1}
+    return self.packer.make_can_msg_safety("IBST_status", 0, values)
 
   def _speed_msg(self, speed):
     values = {"DI_vehicleSpeed": speed * 3.6}
@@ -125,6 +131,21 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
       "DI_autoparkState": autopark_state,
     }
     return self.packer.make_can_msg_safety("DI_state", 0, values)
+
+  def test_ibst_user_brake_disengages(self):
+    self.safety.set_mads_params(True, True, False)
+    self.safety.set_controls_allowed(True)
+    self.safety.set_controls_allowed_lat(True)
+
+    self._rx(self._user_brake_ibst_msg(True))
+    self.assertTrue(self.safety.get_brake_pressed_prev())
+    self.assertTrue(self.safety.get_controls_allowed())
+    self.assertTrue(self.safety.get_controls_allowed_lat())
+
+    self._rx(self._user_brake_ibst_msg(False))
+    self.assertFalse(self.safety.get_brake_pressed_prev())
+    self.assertFalse(self.safety.get_controls_allowed())
+    self.assertFalse(self.safety.get_controls_allowed_lat())
 
   def _long_control_msg(self, set_speed, acc_state=0, jerk_limits=(0, 0), accel_limits=(0, 0), aeb_event=0, bus=0):
     values = {
@@ -214,21 +235,24 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
       self.assertEqual(quality_flag, self._rx(msg))
 
   def test_steering_wheel_disengage(self):
-    # Tesla disengages when the user forcibly overrides the locked-in angle steering control
-    # Either when the hands on level is high, or if there is a high angle rate fault
-    for hands_on_level in range(4):
+    # Tesla disengages on strong driver steering torque, hands-on EPS inhibit, or high angle rate fault
+    test_torques = [-STEER_DISENGAGE_THRESHOLD - 0.01, -STEER_DISENGAGE_THRESHOLD,
+                    0.0,
+                    STEER_DISENGAGE_THRESHOLD, STEER_DISENGAGE_THRESHOLD + 0.01]
+    for torsion_bar_torque in test_torques:
       for eac_status in range(8):
         for eac_error_code in range(16):
           self.safety.set_controls_allowed(True)
 
-          should_disengage = hands_on_level >= 3 or (eac_status == 0 and eac_error_code == 9)
-          self.assertTrue(self._rx(self._angle_meas_msg(0, hands_on_level=hands_on_level, eac_status=eac_status,
-                                                        eac_error_code=eac_error_code)))
+          should_disengage = abs(torsion_bar_torque) > STEER_DISENGAGE_THRESHOLD or eac_error_code == 3 or \
+            (eac_status == 0 and eac_error_code == 9)
+          self.assertTrue(self._rx(self._angle_meas_msg(0, eac_status=eac_status, eac_error_code=eac_error_code,
+                                                        torsion_bar_torque=torsion_bar_torque)))
           self.assertNotEqual(should_disengage, self.safety.get_controls_allowed())
           self.assertEqual(should_disengage, self.safety.get_steering_disengage_prev())
 
           # Should not recover
-          self.assertTrue(self._rx(self._angle_meas_msg(0, hands_on_level=0, eac_status=1, eac_error_code=0)))
+          self.assertTrue(self._rx(self._angle_meas_msg(0, eac_status=1, eac_error_code=0, torsion_bar_torque=0.0)))
           self.assertNotEqual(should_disengage, self.safety.get_controls_allowed())
           self.assertFalse(self.safety.get_steering_disengage_prev())
 

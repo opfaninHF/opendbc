@@ -5,7 +5,7 @@ from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.tesla.teslacan import get_steer_ctrl_type
-from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, TeslaFlags
+from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_DISENGAGE_THRESHOLD, STEER_THRESHOLD, TeslaFlags
 
 from opendbc.sunnypilot.car.tesla.carstate_ext import CarStateExt
 
@@ -47,14 +47,26 @@ class CarState(CarStateBase, CarStateExt):
 
     # Vehicle speed
     ret.vEgoRaw = cp_party.vl["DI_speed"]["DI_vehicleSpeed"] * CV.KPH_TO_MS
-    ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw * 1.01)
+    ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
+
+    # Displayed speed: ~1% scale vs DI_vehicleSpeed, with half-unit hysteresis
+    ui_speed_units = self.can_define.dv["DI_speed"]["DI_uiSpeedUnits"].get(int(cp_party.vl["DI_speed"]["DI_uiSpeedUnits"]), None)
+    ui_speed_scale = 1.01
+    if ui_speed_units == "DI_SPEED_KPH":
+      ret.vEgoCluster = cp_party.vl["DI_speed"]["DI_uiSpeed"] * CV.KPH_TO_MS
+    elif ui_speed_units == "DI_SPEED_MPH":
+      ret.vEgoCluster = cp_party.vl["DI_speed"]["DI_uiSpeed"] * CV.MPH_TO_MS
 
     # Gas pedal
     ret.gasPressed = cp_party.vl["DI_systemStatus"]["DI_accelPedalPos"] > 0
 
     # Brake pedal
     ret.brake = 0
-    ret.brakePressed = cp_party.vl["ESP_status"]["ESP_driverBrakeApply"] == 2
+    # Some cars drop stock cruise from IBST before ESP_status reports the brake press.
+    ret.brakePressed = (
+      cp_party.vl["ESP_status"]["ESP_driverBrakeApply"] == 2 or
+      cp_party.vl["IBST_status"]["IBST_driverBrakeApply"] == 2
+    )
 
     # Steering wheel
     epas_status = cp_party.vl["EPAS3S_sysStatus"]
@@ -72,10 +84,11 @@ class CarState(CarStateBase, CarStateExt):
     ret.steerFaultPermanent = eac_status == "EAC_FAULT"
     ret.steerFaultTemporary = eac_status == "EAC_INHIBITED"
 
-    # FSD disengages using union of handsOnLevel (slow overrides) and high angle rate faults (fast overrides, high speed)
+    # FSD disengages on a strong steering torque override or high angle rate faults from fast overrides.
     eac_error_code = self.can_define.dv["EPAS3S_sysStatus"]["EPAS3S_eacErrorCode"].get(int(epas_status["EPAS3S_eacErrorCode"]), None)
-    ret.steeringDisengage = self.hands_on_level >= 3 or (eac_status == "EAC_INHIBITED" and
-                                                         eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY")
+    ret.steeringDisengage = (abs(ret.steeringTorque) > STEER_DISENGAGE_THRESHOLD or
+      eac_error_code == "EAC_ERROR_HANDS_ON" or  # disengages when hands on wheel fault
+      (eac_status == "EAC_INHIBITED" and eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY"))  # disengages when high angle rate fault
 
     # Cruise state
     cruise_state = self.can_define.dv["DI_state"]["DI_cruiseState"].get(int(cp_party.vl["DI_state"]["DI_cruiseState"]), None)
@@ -90,9 +103,12 @@ class CarState(CarStateBase, CarStateExt):
     # Match panda safety cruise engaged logic
     ret.cruiseState.enabled = cruise_enabled and not self.summon
     if speed_units == "KPH":
-      ret.cruiseState.speed = max(cp_party.vl["DI_state"]["DI_digitalSpeed"] * CV.KPH_TO_MS, 1e-3)
+      ret.cruiseState.speedCluster = cp_party.vl["DI_state"]["DI_digitalSpeed"] * CV.KPH_TO_MS
     elif speed_units == "MPH":
-      ret.cruiseState.speed = max(cp_party.vl["DI_state"]["DI_digitalSpeed"] * CV.MPH_TO_MS, 1e-3)
+      ret.cruiseState.speedCluster = cp_party.vl["DI_state"]["DI_digitalSpeed"] * CV.MPH_TO_MS
+    # compensate cruising speed to avoid tesla speedometer showing above the max set speed
+    ret.cruiseState.speed = max(ret.cruiseState.speedCluster / ui_speed_scale, 1e-3)
+
     ret.cruiseState.available = cruise_state == "STANDBY" or ret.cruiseState.enabled
     ret.cruiseState.standstill = False  # This needs to be false, since we can resume from stop without sending anything special
     ret.standstill = cp_party.vl["ESP_B"]["ESP_vehicleStandstillSts"] == 1
