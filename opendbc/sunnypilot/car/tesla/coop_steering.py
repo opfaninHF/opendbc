@@ -26,7 +26,10 @@ STEERING_DEG_PHASE_LEAD_COEFF = 8.0
 # angle override # todo implement steering torque inertia compensation to increase gains
 STEER_OVERRIDE_MIN_TORQUE = 0.5 # Nm - based on typical steering bias + noise
 STEER_OVERRIDE_MAX_TORQUE = 2.5 # Nm max torque before EPS disengages
+
 STEER_OVERRIDE_MAX_LAT_ACCEL = 2.0 # m/s^2 - determines angle rate - speed dependent - similar to Tesla comfort steering mode
+STEER_OVERRIDE_LOW_SPEED_LO = 0
+STEER_OVERRIDE_LOW_SPEED_HI = 3
 STEER_OVERRIDE_LAT_ACCEL_GAIN_LIMIT = 10 # deg/Nm stability and smoothness for angle control  # todo this could be increased after solving feedback stability
 
 # angle ramping
@@ -81,7 +84,8 @@ def calc_override_angle_limited(torque: float, vEgo: float, VM: VehicleModel, la
   torque_to_angle = get_steer_from_lat_accel(lat_accel, vEgo, VM) / STEER_OVERRIDE_TORQUE_RANGE
 
   # limit the gain to prevent jerkiness and instability
-  gain_limit = STEER_OVERRIDE_LAT_ACCEL_GAIN_LIMIT
+  gain_limit = np.interp(vEgo, [STEER_OVERRIDE_LOW_SPEED_LO, STEER_OVERRIDE_LOW_SPEED_HI],
+                         [0, STEER_OVERRIDE_LAT_ACCEL_GAIN_LIMIT])
   override_angle_target = torque * min(torque_to_angle, gain_limit)
 
   return override_angle_target
@@ -278,17 +282,15 @@ class CoopSteeringCarController:
     Vehicle-speed based transition between direct and progressive override control modes.
     Fuzzes the two modes based on the capabilities of the direct control mode.
     """
-    # calculate capability of direct angle override (fully active above ~36kph)
+    # calculate capability of direct angle override (fully active above ~53kph)
     direct_override_capability = (calc_override_angle_limited(STEER_OVERRIDE_TORQUE_RANGE, vEgo, VM, STEER_OVERRIDE_MAX_LAT_ACCEL) /
                    get_steer_from_lat_accel(STEER_OVERRIDE_MAX_LAT_ACCEL, vEgo, VM))
 
     # Direct override capability approaches 0 at standstill as desired lat accel approaches infinity.
-    # Use that as a scale to remove direct override influence at low speeds, ensuring a single
-    # gain contribution in the torque-to-angle conversion.
-    direct_control = direct_override_capability
-    progressive_control = 1.0 - direct_control
+    # Allow more progressive override at when direct override capability drops.
+    progressive_control = 1.0 - direct_override_capability
 
-    apply_angle += direct_control * self.apply_override_angle_direct(driverTorque, vEgo, VM)
+    apply_angle += self.apply_override_angle_direct(driverTorque, vEgo, VM)
 
     apply_angle_delta = apply_angle - self.coop_apply_angle_with_direct_override_last
     self.coop_apply_angle_with_direct_override_last = apply_angle
