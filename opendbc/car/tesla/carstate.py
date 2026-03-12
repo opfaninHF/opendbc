@@ -5,7 +5,7 @@ from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
 from opendbc.car.tesla.teslacan import get_steer_ctrl_type
-from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_THRESHOLD, TeslaFlags
+from opendbc.car.tesla.values import DBC, CANBUS, GEAR_MAP, STEER_DISENGAGE_THRESHOLD, STEER_THRESHOLD, TeslaFlags
 
 from opendbc.sunnypilot.car.tesla.carstate_ext import CarStateExt
 
@@ -84,10 +84,11 @@ class CarState(CarStateBase, CarStateExt):
     ret.steerFaultPermanent = eac_status == "EAC_FAULT"
     ret.steerFaultTemporary = eac_status == "EAC_INHIBITED"
 
-    # FSD disengages using union of handsOnLevel (slow overrides) and high angle rate faults (fast overrides, high speed)
+    # FSD disengages on a high hands-on level, strong steering torque override, or high angle rate faults from fast overrides.
     eac_error_code = self.can_define.dv["EPAS3S_sysStatus"]["EPAS3S_eacErrorCode"].get(int(epas_status["EPAS3S_eacErrorCode"]), None)
-    ret.steeringDisengage = self.hands_on_level >= 3 or (eac_status == "EAC_INHIBITED" and
-                                                         eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY")
+    ret.steeringDisengage = self.hands_on_level >= 3 or \
+      abs(ret.steeringTorque) > STEER_DISENGAGE_THRESHOLD or \
+      (eac_status == "EAC_INHIBITED" and eac_error_code == "EAC_ERROR_HIGH_ANGLE_RATE_SAFETY")
 
     # Cruise state
     cruise_state = self.can_define.dv["DI_state"]["DI_cruiseState"].get(int(cp_party.vl["DI_state"]["DI_cruiseState"]), None)

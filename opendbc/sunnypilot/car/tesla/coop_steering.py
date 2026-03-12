@@ -21,8 +21,6 @@ DT_LAT_CTRL = DT_CTRL * CarControllerParams.STEER_STEP
 class CoopSteeringCarControllerParams(CarControllerParams):
   ANGLE_LIMITS = replace(CarControllerParams.ANGLE_LIMITS, MAX_ANGLE_RATE=5)
 
-STEERING_DEG_PHASE_LEAD_COEFF = 8.0
-
 # angle override # todo implement steering torque inertia compensation to increase gains
 STEER_OVERRIDE_MIN_TORQUE = 0.5 # Nm - based on typical steering bias + noise
 STEER_OVERRIDE_MAX_TORQUE = 2.5 # Nm max torque before EPS disengages
@@ -325,13 +323,13 @@ class CoopSteeringCarController:
       )
     return self.override_accel_rate_limiter.update(apply_angle, DT_LAT_CTRL, max_angle_rate, max_angle_accel, 100_000.0) #, snap = False)
 
-  def resume_steer_desired_rate_limit(self, lat_active: bool, apply_angle: float, steering_angle: float) -> float:
+  def resume_steer_desired_rate_limit(self, lat_active: bool, apply_angle: float) -> float:
     """Limits steering wheel acceleration when resuming steering"""
     if not lat_active:
       # reset and bypass
       self.resume_rate_limiter_delta.reset(0)
-      self.resume_rate_limiter.reset(steering_angle)
-      return steering_angle
+      self.resume_rate_limiter.reset(apply_angle)
+      return apply_angle
 
     angle_rate_delta_lim = self.resume_rate_limiter_delta.update(CarControllerParams.ANGLE_LIMITS.MAX_ANGLE_RATE,
                                                          STEER_RESUME_RATE_LIMIT_RAMP_RATE * DT_LAT_CTRL**2)
@@ -339,13 +337,10 @@ class CoopSteeringCarController:
     return apply_angle_lim
 
   def update(self, apply_angle, lat_active, CP_SP: structs.CarParamsSP, CS: structs.CarState, VM: VehicleModel) -> CoopSteeringDataSP:
-    # estimate real steering angle by adding rate to the tesla filtered angle
-    steeringAngleDegPhaseLead = CS.out.steeringAngleDeg + CS.out.steeringRateDeg / STEERING_DEG_PHASE_LEAD_COEFF
-
     angle_coop_enabled = CP_SP.flags & TeslaFlagsSP.COOP_STEERING.value
 
     # avoid sudden rotation on engagement
-    apply_angle = self.resume_steer_desired_rate_limit(lat_active, apply_angle, steeringAngleDegPhaseLead)
+    apply_angle = self.resume_steer_desired_rate_limit(lat_active, apply_angle)
 
     if not lat_active or not angle_coop_enabled:
       self.reset_override_state(apply_angle)
