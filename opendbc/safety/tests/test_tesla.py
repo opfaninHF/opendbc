@@ -235,28 +235,41 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
       self.assertEqual(quality_flag, self._rx(msg))
 
   def test_steering_wheel_disengage(self):
-    # Tesla disengages on high hands-on level, strong driver steering torque, or high angle rate fault
-    test_torques = [-STEER_DISENGAGE_THRESHOLD - 0.01, -STEER_DISENGAGE_THRESHOLD,
-                    0.0,
-                    STEER_DISENGAGE_THRESHOLD, STEER_DISENGAGE_THRESHOLD + 0.01]
+    # Tesla disengages when the user forcibly overrides the locked-in angle steering control
+    # Either when the hands on level is high, or if there is a high angle rate fault
     for hands_on_level in range(4):
-      for torsion_bar_torque in test_torques:
-        for eac_status in range(8):
-          for eac_error_code in range(16):
-            self.safety.set_controls_allowed(True)
+      for eac_status in range(8):
+        for eac_error_code in range(16):
+          self.safety.set_controls_allowed(True)
 
-            should_disengage = hands_on_level >= 3 or abs(torsion_bar_torque) > STEER_DISENGAGE_THRESHOLD or \
-              (eac_status == 0 and eac_error_code == 9)
-            self.assertTrue(self._rx(self._angle_meas_msg(0, hands_on_level=hands_on_level,
-                                                          eac_status=eac_status, eac_error_code=eac_error_code,
-                                                          torsion_bar_torque=torsion_bar_torque)))
+          should_disengage = hands_on_level >= 3 or (eac_status == 0 and eac_error_code == 9)
+          self.assertTrue(self._rx(self._angle_meas_msg(0, hands_on_level=hands_on_level, eac_status=eac_status,
+                                                        eac_error_code=eac_error_code)))
           self.assertNotEqual(should_disengage, self.safety.get_controls_allowed())
           self.assertEqual(should_disengage, self.safety.get_steering_disengage_prev())
 
           # Should not recover
-          self.assertTrue(self._rx(self._angle_meas_msg(0, eac_status=1, eac_error_code=0, torsion_bar_torque=0.0)))
+          self.assertTrue(self._rx(self._angle_meas_msg(0, hands_on_level=0, eac_status=1, eac_error_code=0)))
           self.assertNotEqual(should_disengage, self.safety.get_controls_allowed())
           self.assertFalse(self.safety.get_steering_disengage_prev())
+
+  def test_steering_wheel_torque_disengage(self):
+    for torsion_bar_torque, should_disengage in (
+      (-STEER_DISENGAGE_THRESHOLD - 0.01, True),
+      (-STEER_DISENGAGE_THRESHOLD, False),
+      (STEER_DISENGAGE_THRESHOLD, False),
+      (STEER_DISENGAGE_THRESHOLD + 0.01, True),
+    ):
+      self.safety.set_controls_allowed(True)
+
+      self.assertTrue(self._rx(self._angle_meas_msg(0, torsion_bar_torque=torsion_bar_torque)))
+      self.assertNotEqual(should_disengage, self.safety.get_controls_allowed())
+      self.assertEqual(should_disengage, self.safety.get_steering_disengage_prev())
+
+      # Should not recover
+      self.assertTrue(self._rx(self._angle_meas_msg(0)))
+      self.assertNotEqual(should_disengage, self.safety.get_controls_allowed())
+      self.assertFalse(self.safety.get_steering_disengage_prev())
 
   def test_autopark_summon_while_enabled(self):
     # We should not respect Autopark that activates while controls are allowed

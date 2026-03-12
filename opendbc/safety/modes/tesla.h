@@ -17,7 +17,7 @@
 #define TESLA_VEHICLE_BUS_ADDR_CHECK \
   {.msg = {{0x3DF, 1, 8, 2U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},    /* UI_status2 */ \
 
-#define TESLA_STEERING_DISENGAGE_TORQUE 400 // cNm
+#define TESLA_STEERING_DISENGAGE_TORQUE 500 // cNm
 
 static bool tesla_longitudinal = false;
 static bool tesla_fsd_14 = false;
@@ -147,7 +147,7 @@ static void tesla_rx_hook(const CANPacket_t *msg) {
       const int eac_status = msg->data[6] >> 5;  // EPAS3S_eacStatus
       const int eac_error_code = msg->data[2] >> 4;  // EPAS3S_eacErrorCode
 
-      // Disengage on strong user override, or if high angle rate fault from user overriding extremely quickly
+      // Disengage on user override, or if high angle rate fault from user overriding extremely quickly
       steering_disengage = (hands_on_level >= 3) ||
                            (SAFETY_ABS(torsion_bar_torque) > TESLA_STEERING_DISENGAGE_TORQUE) ||
                            ((eac_status == 0) && (eac_error_code == 9));
