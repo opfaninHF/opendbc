@@ -11,16 +11,14 @@ from opendbc.can.parser import CANParser
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.tesla.values import DBC, CANBUS
 from opendbc.sunnypilot.car.tesla.values import TeslaFlagsSP
-from opendbc.sunnypilot.car.tesla.coop_steering import CoopSteeringCarState
 
 ButtonType = structs.CarState.ButtonEvent.Type
 
 
-class CarStateExt(CoopSteeringCarState):
+class CarStateExt:
   def __init__(self, CP: structs.CarParams, CP_SP: structs.CarParamsSP):
     self.CP = CP
     self.CP_SP = CP_SP
-    CoopSteeringCarState.__init__(self)
 
     self.infotainment_3_finger_press = 0
 
@@ -28,7 +26,6 @@ class CarStateExt(CoopSteeringCarState):
     self.brake_combo_prev = False
 
   def update(self, ret: structs.CarState, ret_sp: structs.CarStateSP, can_parsers: dict[StrEnum, CANParser]) -> None:
-    # ret.steeringDisengage = self.controls_disengage_cond(ret)
     button_events = []
     if self.CP_SP.flags & TeslaFlagsSP.HAS_VEHICLE_BUS:
       cp_adas = can_parsers[Bus.adas]

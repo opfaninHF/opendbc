@@ -10,7 +10,6 @@
   {.msg = {{0x370, 0, 8, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  /* EPAS3S_sysStatus (steering angle) */            \
   {.msg = {{0x118, 0, 8, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  /* DI_systemStatus (gas pedal) */                  \
   {.msg = {{0x145, 0, 8, 50U, .max_counter = 15U}, { 0 }, { 0 }}},                                /* ESP_status (brakes) */                          \
-  {.msg = {{0x39d, 0, 5, 50U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  /* IBST_status (brakes) */                         \
   {.msg = {{0x286, 0, 8, 10U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},   /* DI_state (acc state) */                         \
   {.msg = {{0x311, 0, 7, 10U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},   /* UI_warning (blinkers, buckle switch & doors) */ \
 
@@ -22,8 +21,6 @@
 static bool tesla_longitudinal = false;
 static bool tesla_fsd_14 = false;
 static bool tesla_stock_aeb = false;
-static bool tesla_esp_brake_pressed = false;
-static bool tesla_ibst_brake_pressed = false;
 
 // Only rising edges while controls are not allowed are considered for these systems:
 
@@ -51,8 +48,8 @@ static uint8_t tesla_get_counter(const CANPacket_t *msg) {
   } else if (msg->addr == 0x488U) {
     // Signal: DAS_steeringControlCounter
     cnt = msg->data[2] & 0x0FU;
-  } else if ((msg->addr == 0x257U) || (msg->addr == 0x118U) || (msg->addr == 0x145U) || (msg->addr == 0x39DU) || (msg->addr == 0x286U) || (msg->addr == 0x311U)) {
-    // Signal: DI_speedCounter, DI_systemStatusCounter, ESP_statusCounter, IBST_statusCounter, DI_locStatusCounter, UI_warningCounter
+  } else if ((msg->addr == 0x257U) || (msg->addr == 0x118U) || (msg->addr == 0x145U) || (msg->addr == 0x286U) || (msg->addr == 0x311U)) {
+    // Signal: DI_speedCounter, DI_systemStatusCounter, ESP_statusCounter, DI_locStatusCounter, UI_warningCounter
     cnt = msg->data[1] & 0x0FU;
   } else if (msg->addr == 0x155U) {
     // Signal: ESP_wheelRotationCounter
@@ -73,8 +70,8 @@ static int _tesla_get_checksum_byte(const int addr) {
   } else if (addr == 0x488) {
     // Signal: DAS_steeringControlChecksum
     checksum_byte = 3;
-  } else if ((addr == 0x257) || (addr == 0x118) || (addr == 0x145) || (addr == 0x39D) || (addr == 0x286) || (addr == 0x311)) {
-    // Signal: DI_speedChecksum, DI_systemStatusChecksum, ESP_statusChecksum, IBST_statusChecksum, DI_locStatusChecksum, UI_warningChecksum
+  } else if ((addr == 0x257) || (addr == 0x118) || (addr == 0x145) || (addr == 0x286) || (addr == 0x311)) {
+    // Signal: DI_speedChecksum, DI_systemStatusChecksum, ESP_statusChecksum, DI_locStatusChecksum, UI_warningChecksum
     checksum_byte = 0;
   } else {
   }
@@ -174,13 +171,7 @@ static void tesla_rx_hook(const CANPacket_t *msg) {
 
     // Brake pressed
     if (msg->addr == 0x145U) {
-      tesla_esp_brake_pressed = ((msg->data[3] >> 5) & 0x03U) == 2U;
-      brake_pressed = tesla_esp_brake_pressed || tesla_ibst_brake_pressed;
-    }
-
-    if (msg->addr == 0x39DU) {
-      tesla_ibst_brake_pressed = ((msg->data[2] >> 0) & 0x03U) == 2U;
-      brake_pressed = tesla_esp_brake_pressed || tesla_ibst_brake_pressed;
+      brake_pressed = ((msg->data[3] >> 5) & 0x03U) == 2U;
     }
 
     // Cruise and Summon state
@@ -404,8 +395,6 @@ static safety_config tesla_init(uint16_t param) {
   tesla_has_vehicle_bus = GET_FLAG(current_safety_param_sp, TESLA_PARAM_SP_VEHICLE_BUS);
 
   tesla_stock_aeb = false;
-  tesla_esp_brake_pressed = false;
-  tesla_ibst_brake_pressed = false;
   tesla_stock_steering_control = false;
   tesla_stock_steering_control_prev = false;
   // we need to assume Autopark/Summon on startup since DI_state is a low freq msg.

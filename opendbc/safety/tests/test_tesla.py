@@ -104,10 +104,6 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
       values["ESP_driverBrakeApply"] = random.choice((0, 3))  # NotInit_orOff, Faulty_SNA
     return self.packer.make_can_msg_safety("ESP_status", 0, values)
 
-  def _user_brake_ibst_msg(self, brake):
-    values = {"IBST_driverBrakeApply": 2 if brake else 1}
-    return self.packer.make_can_msg_safety("IBST_status", 0, values)
-
   def _speed_msg(self, speed):
     values = {"DI_vehicleSpeed": speed * 3.6}
     return self.packer.make_can_msg_safety("DI_speed", 0, values)
@@ -131,21 +127,6 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
       "DI_autoparkState": autopark_state,
     }
     return self.packer.make_can_msg_safety("DI_state", 0, values)
-
-  def test_ibst_user_brake_disengages(self):
-    self.safety.set_mads_params(True, True, False)
-    self.safety.set_controls_allowed(True)
-    self.safety.set_controls_allowed_lat(True)
-
-    self._rx(self._user_brake_ibst_msg(True))
-    self.assertTrue(self.safety.get_brake_pressed_prev())
-    self.assertTrue(self.safety.get_controls_allowed())
-    self.assertTrue(self.safety.get_controls_allowed_lat())
-
-    self._rx(self._user_brake_ibst_msg(False))
-    self.assertFalse(self.safety.get_brake_pressed_prev())
-    self.assertFalse(self.safety.get_controls_allowed())
-    self.assertFalse(self.safety.get_controls_allowed_lat())
 
   def _long_control_msg(self, set_speed, acc_state=0, jerk_limits=(0, 0), accel_limits=(0, 0), aeb_event=0, bus=0):
     values = {

@@ -1,6 +1,6 @@
 import copy
 from opendbc.can import CANDefine, CANParser
-from opendbc.car import Bus, structs
+from opendbc.car import Bus, create_button_events, structs
 from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import CarStateBase
@@ -28,6 +28,7 @@ class CarState(CarStateBase, CarStateExt):
     self.suspected_fsd14 = False
 
     self.hands_on_level = 0
+    self.prev_acc_state = 0
     self.das_control = None
 
   def update_summon_state(self, summon_state: str, cruise_enabled: bool):
@@ -62,11 +63,7 @@ class CarState(CarStateBase, CarStateExt):
 
     # Brake pedal
     ret.brake = 0
-    # Some cars drop stock cruise from IBST before ESP_status reports the brake press.
-    ret.brakePressed = (
-      cp_party.vl["ESP_status"]["ESP_driverBrakeApply"] == 2 or
-      cp_party.vl["IBST_status"]["IBST_driverBrakeApply"] == 2
-    )
+    ret.brakePressed = cp_party.vl["ESP_status"]["ESP_driverBrakeApply"] == 2
 
     # Steering wheel
     epas_status = cp_party.vl["EPAS3S_sysStatus"]
@@ -74,7 +71,7 @@ class CarState(CarStateBase, CarStateExt):
     ret.steeringAngleDeg = -epas_status["EPAS3S_internalSAS"]
     ret.steeringRateDeg = -cp_ap_party.vl["SCCM_steeringAngleSensor"]["SCCM_steeringAngleSpeed"]
     ret.steeringTorque = -epas_status["EPAS3S_torsionBarTorque"]
-    # Convert rack force to estimated steering-wheel torque using static rack geometry only.
+    # Convert rack force to estimated steering-wheel torque using static rack geometry only - as if EPS was not present
     ret.steeringTorqueEps = -epas_status["EPAS3S_steeringRackForce"] * STEERING_KNUCKLE_ARM_LENGTH_M / self.CP.steerRatio
 
     # stock handsOnLevel uses >0.5 for 0.25s, but is too slow
@@ -114,6 +111,16 @@ class CarState(CarStateBase, CarStateExt):
     ret.standstill = cp_party.vl["ESP_B"]["ESP_vehicleStandstillSts"] == 1
     ret.accFaulted = cruise_state == "FAULT"
 
+    acc_state = cp_ap_party.vl["DAS_control"]["DAS_accState"]
+    ret.buttonEvents = [
+      *create_button_events(
+        acc_state,
+        self.prev_acc_state,
+        {13: ButtonType.cancel},
+      ),
+    ]
+    self.prev_acc_state = acc_state
+
     # Gear
     ret.gearShifter = GEAR_MAP[self.can_define.dv["DI_systemStatus"]["DI_gear"].get(int(cp_party.vl["DI_systemStatus"]["DI_gear"]), "DI_GEAR_INVALID")]
 
@@ -128,11 +135,8 @@ class CarState(CarStateBase, CarStateExt):
     ret.seatbeltUnlatched = cp_party.vl["UI_warning"]["buckleStatus"] != 1
 
     # Blindspot
-    ap_lane_state = self.can_define.dv["DAS_status"]["DAS_autoLaneChangeState"].get(int(cp_ap_party.vl["DAS_status"]["DAS_autoLaneChangeState"]), None)
-    left_lane_available = ap_lane_state in ("ALC_AVAILABLE_ONLY_L", "ALC_AVAILABLE_BOTH")
-    right_lane_available = ap_lane_state in ("ALC_AVAILABLE_ONLY_R", "ALC_AVAILABLE_BOTH")
-    ret.leftBlindspot = cp_ap_party.vl["DAS_status"]["DAS_blindSpotRearLeft"] != 0 or not left_lane_available
-    ret.rightBlindspot = cp_ap_party.vl["DAS_status"]["DAS_blindSpotRearRight"] != 0 or not right_lane_available
+    ret.leftBlindspot = cp_ap_party.vl["DAS_status"]["DAS_blindSpotRearLeft"] != 0
+    ret.rightBlindspot = cp_ap_party.vl["DAS_status"]["DAS_blindSpotRearRight"] != 0
 
     # AEB
     ret.stockAeb = cp_ap_party.vl["DAS_control"]["DAS_aebEvent"] == 1
