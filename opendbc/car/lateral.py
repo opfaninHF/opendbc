@@ -161,9 +161,8 @@ def apply_center_deadzone(error, deadzone):
 def get_friction(lateral_accel_error: float, lateral_accel_deadzone: float, friction_threshold: float,
                  torque_params: structs.CarParams.LateralTorqueTuning) -> float:
   # TODO torque params' friction should be in lataxel space, not torque space
-  friction_interp = np.interp(
-    apply_center_deadzone(lateral_accel_error, lateral_accel_deadzone),
-    [-friction_threshold, friction_threshold],
-    [-torque_params.friction * torque_params.latAccelFactor, torque_params.friction * torque_params.latAccelFactor]
-  )
-  return float(friction_interp)
+  # tanh replaces piecewise-linear np.interp to remove slope kink at ±friction_threshold,
+  # giving smooth unwind through the threshold boundary
+  error_centered = apply_center_deadzone(lateral_accel_error, lateral_accel_deadzone)
+  friction_max = torque_params.friction * torque_params.latAccelFactor
+  return float(friction_max * np.tanh(error_centered / friction_threshold))
